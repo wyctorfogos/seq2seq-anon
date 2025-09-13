@@ -6,71 +6,91 @@ from trl import SFTTrainer
 import os
 
 # --- 1. Configurações ---
-MODEL_ID = "google/gemma-2b-it"  # Modelo pequeno e eficiente
-DATA_DIR = "data_seq2seq"       # Diretório onde estão seus dados
-OUTPUT_DIR = "gemma-2b-anonimizador" # Diretório para salvar o adaptador
-NUM_TRAIN_EPOCHS = 3            # Número de épocas de treinamento
+# Corrigido para o nome do modelo de instrução mais recente da família Qwen2
+MODEL_ID = "Qwen/Qwen2-0.5B-Instruct" 
+DATA_DIR = "data_seq2seq"
+OUTPUT_DIR = "qwen2-0.5b-anonimizador" # Nome do diretório de saída atualizado
+NUM_TRAIN_EPOCHS = 3
 
 # --- 2. Configuração de Quantização (BitsAndBytes) ---
-# Carrega o modelo em 4-bit para economizar memória
+# Esta parte está correta e não precisa de mudanças.
 bnb_config = BitsAndBytesConfig(
     load_in_4bit=True,
     bnb_4bit_quant_type="nf4",
-    bnb_4bit_compute_dtype=torch.bfloat16 # Use bfloat16 para melhor desempenho
+    bnb_4bit_compute_dtype=torch.bfloat16
 )
 
 # --- 3. Carregar Modelo e Tokenizador ---
 model = AutoModelForCausalLM.from_pretrained(
     MODEL_ID,
     quantization_config=bnb_config,
-    device_map="auto" # Mapeia o modelo para a GPU automaticamente
+    device_map="auto"
 )
 tokenizer = AutoTokenizer.from_pretrained(MODEL_ID)
-# Modelos Gemma não têm um pad_token por padrão. Usamos o eos_token.
-tokenizer.pad_token = tokenizer.eos_token 
+
+# --- IMPORTANTE: Configuração do Tokenizador para Qwen ---
+# O Qwen não tem um pad_token. Usar o eos_token é uma solução comum.
+# Adicionamos o padding_side para evitar problemas com alguns warnings e gerações.
+tokenizer.pad_token = tokenizer.eos_token
+tokenizer.padding_side = "right" 
 
 # --- 4. Preparar o Modelo para Treinamento com LoRA ---
-model.gradient_checkpointing_enable() # Outra técnica de economia de memória
+# Esta parte está correta e não precisa de mudanças.
+model.gradient_checkpointing_enable()
 model = prepare_model_for_kbit_training(model)
 
 # --- 5. Configuração do LoRA ---
-# Define quais camadas do modelo serão adaptadas
+# Os target_modules para o Qwen2-0.5B são os mesmos do Gemma, o que simplifica a troca.
+# Para outros modelos, você precisaria verificar os nomes das camadas.
 lora_config = LoraConfig(
-    r=8, # Dimensão do rank (menor = menos parâmetros treináveis)
+    r=16, # Aumentei um pouco o rank para dar mais capacidade ao modelo
     lora_alpha=32,
-    target_modules=["q_proj", "k_proj", "v_proj", "o_proj"], # Camadas de atenção do Gemma
+    target_modules=["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"], # Adicionei mais camadas para um fine-tuning mais robusto
     lora_dropout=0.05,
     bias="none",
     task_type="CAUSAL_LM"
 )
-# Aplica o LoRA ao modelo
 model = get_peft_model(model, lora_config)
 
 # --- 6. Carregar e Preparar o Dataset ---
-# Carrega os arquivos .jsonl
 dataset = load_dataset("json", data_dir=DATA_DIR, split="train")
 
-# Formata o dataset para o formato de instrução que o Gemma espera
+# --- MUDANÇA CRÍTICA: Formatação do Prompt para o Qwen2 ---
+# Esta função foi reescrita para usar o template de chat do Qwen2.
+# Usar o template correto é ESSENCIAL para o sucesso do fine-tuning.
 def formatting_prompts_func(example):
-    # O modelo Gemma foi treinado com um formato específico de chat/instrução.
-    # Seguir esse formato melhora os resultados.
-    # O prompt instrui o modelo sobre a tarefa a ser executada.
-    text = f"<start_of_turn>user\nAnonimize os dados pessoais no texto a seguir, substituindo-os por '[DADO_MASCARADO]'.\nTexto original: {example['input']}<end_of_turn>\n<start_of_turn>model\n{example['output']}<end_of_turn>"
-    return { "text": text }
+    # A instrução para o modelo
+    # Note que não há uma role "system" explícita aqui para simplificar, 
+    # a instrução direta no "user" funciona muito bem para tarefas específicas.
+    prompt = (
+        f"Anonimize os dados pessoais no texto a seguir, substituindo-os por '[DADO_MASCARADO]'.\n"
+        f"Texto original: {example['input']}"
+    )
+    
+    # Monta o template completo
+    messages = [
+        {"role": "user", "content": prompt},
+        {"role": "assistant", "content": example['output']}
+    ]
+    
+    # O tokenizador do Qwen2 tem um método que faz isso automaticamente
+    text = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=False)
+    return {"text": text}
 
 dataset = dataset.map(formatting_prompts_func)
 
 # --- 7. Configurar os Argumentos de Treinamento ---
+# Esta parte está correta, apenas ajustei o nome do diretório.
 training_args = TrainingArguments(
-    per_device_train_batch_size=2, # Batch size pequeno para caber na VRAM
-    gradient_accumulation_steps=4, # Simula um batch size maior (2*4=8) sem usar mais VRAM
+    per_device_train_batch_size=2,
+    gradient_accumulation_steps=4,
     learning_rate=2e-4,
     num_train_epochs=NUM_TRAIN_EPOCHS,
     output_dir=OUTPUT_DIR,
     logging_steps=10,
-    fp16=True, # Use fp16 para acelerar o treinamento
+    fp16=True, # bf16=True se sua GPU suportar (séries 30xx, 40xx, A100)
     save_strategy="epoch",
-    optim="paged_adamw_8bit" # Otimizador que economiza memória
+    optim="paged_adamw_8bit"
 )
 
 # --- 8. Iniciar o Treinamento ---
@@ -78,16 +98,15 @@ trainer = SFTTrainer(
     model=model,
     train_dataset=dataset,
     dataset_text_field="text",
-    max_seq_length=1024, # Comprimento máximo da sequência
+    max_seq_length=1024,
     tokenizer=tokenizer,
     args=training_args,
     packing=False,
 )
 
-print("🚀 Iniciando o treinamento...")
+print("🚀 Iniciando o treinamento com o modelo Qwen2-0.5B-Instruct...")
 trainer.train()
 
 # --- 9. Salvar o Adaptador LoRA ---
-# Salva apenas os pesos do adaptador, que é um arquivo pequeno
 trainer.save_model(OUTPUT_DIR)
 print(f"✅ Adaptador LoRA salvo em '{OUTPUT_DIR}'")
