@@ -1,6 +1,3 @@
-# generate_seq2seq_dataset.py
-# pip install faker
-
 import os, json, random, re
 from faker import Faker
 
@@ -8,8 +5,8 @@ fake = Faker("pt_BR")
 Faker.seed(42)
 random.seed(42)
 
-NUM_EXAMPLES = 20000           # ajustar conforme disponibilidade
-VAL_FRACTION = 0.05            # 5% para validação
+NUM_EXAMPLES = 20000 
+VAL_FRACTION = 0.05           
 OUT_DIR = "data_seq2seq"
 os.makedirs(OUT_DIR, exist_ok=True)
 MASK = "[DADO_MASCARADO]"
