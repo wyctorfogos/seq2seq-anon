@@ -1,6 +1,6 @@
 # inference_masking.py
 import json
-from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
+from transformers import AutoTokenizer, AutoModelForSeq2SeqLM, DataCollatorForSeq2Seq, Seq2SeqTrainer, Seq2SeqTrainingArguments
 import argparse
 import os
 import math
@@ -24,7 +24,7 @@ def chunk_text(text, tokenizer, max_tokens=250):
 # Parser de argumentos
 # -------------------
 parser = argparse.ArgumentParser()
-parser.add_argument("--model_dir", default="./t5-anon")
+parser.add_argument("--model_dir", default="./finetuned-anon")  # diretório do modelo fine-tuned
 parser.add_argument("--input_file", required=True)   # arquivo com textos brutos (1 por linha ou JSONL com field "text")
 parser.add_argument("--out_file", default="masked_outputs.jsonl")
 parser.add_argument("--chunk_size", type=int, default=250, help="Tamanho máximo de tokens por chunk")
