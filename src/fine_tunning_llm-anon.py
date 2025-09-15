@@ -4,9 +4,9 @@ from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
 from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
 from trl import SFTTrainer
 
-MODEL_ID = "Qwen/Qwen2-0.5B-Instruct"
+MODEL_ID = "Qwen/Qwen2.5-0.5B-Instruct"
 DATA_DIR = "data_seq2seq"
-OUTPUT_DIR = "qwen2-0.5b-anonimizador"
+OUTPUT_DIR = f"{str(MODEL_ID).replace("/","-").lower()}-anonimizador"
 NUM_TRAIN_EPOCHS = 3
 
 # --- 1. Quantização ---
@@ -34,8 +34,8 @@ model = prepare_model_for_kbit_training(model)
 lora_config = LoraConfig(
     r=16,
     lora_alpha=8,
-    target_modules=["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"],
-    lora_dropout=0.05,
+    target_modules=["q_proj", "k_proj", "v_proj", "o_proj"],
+    lora_dropout=0.1,
     bias="none",
     task_type="CAUSAL_LM"
 )
@@ -70,7 +70,7 @@ training_args = TrainingArguments(
     learning_rate=5e-5,
     per_device_train_batch_size=4,
     per_device_eval_batch_size=4,
-    num_train_epochs=3,
+    num_train_epochs=5,
     weight_decay=0.01,
     logging_dir="./logs",
     logging_steps=100,

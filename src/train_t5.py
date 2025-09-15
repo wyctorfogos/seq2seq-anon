@@ -9,7 +9,7 @@ parser.add_argument("--model", default="t5-small")
 parser.add_argument("--data_dir", default="data_seq2seq")
 parser.add_argument("--output_dir", default="./t5-anon")
 parser.add_argument("--num_train_epochs", type=int, default=3)
-parser.add_argument("--per_device_train_batch_size", type=int, default=2)
+parser.add_argument("--per_device_train_batch_size", type=int, default=16)
 parser.add_argument("--learning_rate", type=float, default=5e-5)
 args = parser.parse_args()
 
@@ -28,7 +28,7 @@ training_args = Seq2SeqTrainingArguments(
     per_device_train_batch_size=args.per_device_train_batch_size,
     per_device_eval_batch_size=args.per_device_train_batch_size,
     predict_with_generate=True,
-    evaluation_strategy="epoch",
+    eval_strategy="epoch",
     save_strategy="epoch",
     learning_rate=args.learning_rate,
     logging_steps=200,

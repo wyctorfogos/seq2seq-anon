@@ -24,6 +24,7 @@ args = Seq2SeqTrainingArguments(
     per_device_eval_batch_size=2,
     learning_rate=2e-4,
     num_train_epochs=5,
+    do_eval=True,
     fp16=False,
     evaluation_strategy="steps",
     save_strategy="steps",
