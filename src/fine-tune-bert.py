@@ -1,12 +1,12 @@
 from datasets import load_dataset
 from transformers import AutoTokenizer, AutoModelForTokenClassification, DataCollatorForTokenClassification, TrainingArguments, Trainer
 
-model_name = "neuralmind/bert-base-portuguese-cased"
+model_name = "celiudos/legal-bert-lgpd" # "pierreguillou/ner-bert-large-cased-pt-lenerbr" # "neuralmind/bert-base-portuguese-cased"
 
 # Dataset no formato HuggingFace (tokens + labels)
 dataset = load_dataset("json", data_files={"train": "data_ner/train_ner.jsonl", "validation": "data_ner/val_ner.jsonl"})
 
-label_list = ["O", "B-PER", "I-PER", "B-CPF", "B-O", "I-CPF", "B-ADDR", "I-ADDR", "B-ORG", "B-AGE", "I-ORG", "I-O", "B-EMAIL", "I-EMAIL", "B-PHONE", "I-PHONE", "B-DATE", "I-DATE", "B-RG", "I-RG", "B-CNPJ", "I-CNPJ"]
+label_list = ["O", "B-PER", "I-PER", "I-CPF",  "B-CPF", "B-O", "I-O", "B-ADDR", "I-ADDR", "B-ORG", "B-AGE", "I-AGE", "B-CEP", "I-CEP", "B-LAW", "I-LAW", "B-LICENSE_PLATE", "I-LICENSE_PLATE", "B-OAB", "I-OAB", "I-ORG", "B-EMAIL", "I-EMAIL", "B-PHONE", "I-", "I-PHONE", "B-DATE", "I-DATE", "B-RG", "I-RG", "B-CNPJ", "I-CNPJ"]
 label2id = {l:i for i,l in enumerate(label_list)}
 id2label = {i:l for l,i in label2id.items()}
 
@@ -54,10 +54,10 @@ args = TrainingArguments(
     eval_strategy="epoch",
     save_strategy="epoch",
     learning_rate=5e-5,
-    per_device_train_batch_size=4,
-    per_device_eval_batch_size=4,
-    gradient_accumulation_steps=4,
-    num_train_epochs=5,
+    per_device_train_batch_size=8,
+    per_device_eval_batch_size=8,
+    gradient_accumulation_steps=2,
+    num_train_epochs=10,
     weight_decay=0.01,
 )
 

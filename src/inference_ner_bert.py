@@ -3,8 +3,8 @@ import os
 import json
 
 # Caminho do checkpoint treinado
-model_dir = "./ner-anon-model/checkpoint-250"  # ajuste para o melhor checkpoint
-
+# model_dir = "./ner-anon-model/checkpoint-800"  # ajuste para o melhor checkpoint
+model_dir = "celiudos/legal-bert-lgpd" # "pierreguillou/ner-bert-large-cased-pt-lenerbr" # "celiudos/legal-bert-lgpd"
 # Carregar tokenizer e modelo
 tokenizer = AutoTokenizer.from_pretrained(model_dir)
 model = AutoModelForTokenClassification.from_pretrained(model_dir)
@@ -104,13 +104,13 @@ def make_json_serializable(obj):
 # Exemplo de uso
 # ----------------------------
 if __name__ == "__main__":
-    with open("./results/anonymized.jsonl", "w", encoding="utf8") as fout:
+    with open(f"./results/anonymized_{str(model_dir).replace("/","-")}.jsonl", "w", encoding="utf8") as fout:
         for text in read_inputs("./data_seq2seq/to_test/sentences2test.txt"):
             masked, ents = anonymize_long_text(
-                text,
+                text.replace("\n"," ").replace("'\'",""),
                 tokenizer,
                 max_tokens=256,
-                stride=100
+                stride=50
             )
             # Converte entities para JSON serializable
             ents_serializable = make_json_serializable(ents)
