@@ -8,3 +8,4 @@ __pycache__
 *.pyc
 *.jsonl
 qwen2-0.5b-anonimizador
+ner-anon-model
