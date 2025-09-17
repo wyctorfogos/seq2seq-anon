@@ -30,7 +30,9 @@ label_list = [
     "B-PHONE", "I-PHONE",
     "B-DATE", "I-DATE",
     "B-RG", "I-RG",
-    "B-CNPJ", "I-CNPJ"
+    "B-CNPJ", "I-CNPJ",
+    "B-MONEY", "I-MONEY",
+    "B-PROCESS_ID", "I-PROCESS_ID"
 ]
 label2id = {l: i for i, l in enumerate(label_list)}
 id2label = {i: l for l, i in label2id.items()}
@@ -140,7 +142,7 @@ args = TrainingArguments(
     num_train_epochs=10,
     weight_decay=1e-2,
     logging_dir="./logs",
-    logging_steps=50,
+    logging_steps=1,
     load_best_model_at_end=True,
     metric_for_best_model="f1",
     greater_is_better=True,

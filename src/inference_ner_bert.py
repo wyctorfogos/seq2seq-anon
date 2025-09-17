@@ -1,10 +1,13 @@
 from transformers import AutoTokenizer, AutoModelForTokenClassification, pipeline
 import os
 import json
+import numpy as np
+import re
+from typing import List, Dict, Any, Tuple
 
 # Caminho do checkpoint treinado
 # model_dir = "./ner-anon-model/checkpoint-800"  # ajuste para o melhor checkpoint
-model_dir = "./ner-anon-model/checkpoint-1000" # "celiudos/legal-bert-lgpd"
+model_dir = "./ner-anon-model/checkpoint-10000" # "celiudos/legal-bert-lgpd"
 # Carregar tokenizer e modelo
 tokenizer = AutoTokenizer.from_pretrained(model_dir)
 model = AutoModelForTokenClassification.from_pretrained(model_dir)
@@ -33,9 +36,6 @@ def read_inputs(path):
                 text = line
             yield text
 
-# -------------------
-# Função de chunking com overlap
-# -------------------
 def chunk_text(text, tokenizer, max_tokens=250, stride=200):
     tokens = tokenizer.encode(text, add_special_tokens=False)
     chunks = []
@@ -43,8 +43,11 @@ def chunk_text(text, tokenizer, max_tokens=250, stride=200):
     while start < len(tokens):
         end = min(start + max_tokens, len(tokens))
         chunk_tokens = tokens[start:end]
-        chunk_text = tokenizer.decode(chunk_tokens, skip_special_tokens=True)
-        chunks.append(chunk_text)
+        # Use convert_tokens_to_string to avoid adding extra spaces
+        chunk = tokenizer.convert_tokens_to_string(
+            tokenizer.convert_ids_to_tokens(chunk_tokens)
+        )
+        chunks.append(chunk)
         if end == len(tokens):
             break
         start += stride
@@ -53,19 +56,14 @@ def chunk_text(text, tokenizer, max_tokens=250, stride=200):
 # -------------------
 # Função de anonimização de um texto (sem chunking)
 # -------------------
-def anonymize_text(text: str):
+def anonymize_text(text: str, score_threshold: float = 0.75):
     entities = nlp(text)
     anonymized_text = text
-
-    # Substituir de trás para frente para não bagunçar os índices
     for ent in sorted(entities, key=lambda x: x["start"], reverse=True):
-        label = ent["entity_group"]
-        start, end = ent["start"], ent["end"]
-
-        # Marcador genérico para a entidade
-        replacement = f"<{label}>"
-        anonymized_text = anonymized_text[:start] + replacement + anonymized_text[end:]
-
+        score = float(ent["score"])
+        if score >= score_threshold:
+            start, end = ent["start"], ent["end"]
+            anonymized_text = anonymized_text[:start] + f"<{ent['entity_group']}>" + anonymized_text[end:]
     return anonymized_text, entities
 
 # -------------------
@@ -78,17 +76,18 @@ def anonymize_long_text(text, tokenizer, max_tokens=250, stride=200):
     all_entities = []
 
     for chunk in chunks:
-        anon_chunk, ents = anonymize_text(chunk)
+        anon_chunk, ents = anonymize_text(text=chunk, score_threshold=0.75)
         final_text.append(anon_chunk)
         all_entities.extend(ents)
 
-    return " ".join(final_text), all_entities
+    final_text = " ".join(final_text)
+    final_text=str(final_text).replace(". ", ".").replace(" / ", "/").replace(" - ","-")
+    return final_text, all_entities
 
 def make_json_serializable(obj):
     """
     Converte tipos não-serializáveis (ex: np.float32) para tipos nativos do Python.
     """
-    
     if isinstance(obj, dict):
         return {k: make_json_serializable(v) for k, v in obj.items()}
     elif isinstance(obj, list):
@@ -100,24 +99,76 @@ def make_json_serializable(obj):
             return float(obj)
         except Exception:
             return str(obj)
+import re
 
-# ----------------------------
-# Exemplo de uso
-# ----------------------------
+def apply_regex_anonymization(text: str):
+    """
+    Aplica regras de Regex para anonimizar o texto e retorna tanto o texto
+    modificado quanto as entidades que foram encontradas e substituídas.
+    """
+    regex_entities = []
+    
+    # Função que será chamada para cada match encontrado pelo re.sub
+    # Ela salva a entidade e retorna a tag para substituição.
+    def find_and_log_entity(match, tag):
+        # Extrai a informação do objeto 'match'
+        word = match.group(0)
+        start, end = match.span()
+        
+        # Cria o dicionário da entidade, no mesmo formato do pipeline da Hugging Face
+        entity = {
+            "entity_group": tag.strip("<>"), # Salva o nome da tag sem '<' e '>'
+            "score": 1.0,                     # Score de confiança 1.0, pois Regex é determinístico
+            "word": word,
+            "start": start,
+            "end": end
+        }
+        regex_entities.append(entity)
+        
+        # Retorna a tag que substituirá o texto encontrado
+        return tag
+
+    substitutions = [
+        (re.compile(r'\b(?:\d{3}\.\d{3}\.\d{3}-\d{2}|\d{11})\b'), "<CPF>"),
+        (re.compile(r'\b(?:\d{2}\.\d{3}\.\d{3}\/\d{4}-\d{2}|\d{14})\b'), "<CNPJ>"),
+        (re.compile(r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b'), "<EMAIL>"),
+        (re.compile(r'\b(?:\+55\s?)?(?:\(?\d{2}\)?\s?)?(?:9?\d{4}[-\s]?\d{4})\b'), "<PHONE>"),
+        (re.compile(r'\b\d{5}-?\d{3}\b'), "<CEP>"),
+        (re.compile(r'\b(?:\d{7}\-\d{2}\.\d{4}.\d{1}\d{2}.\d{4}.\|\d{16})\b'), "<PROCESS_ID>"),
+        (re.compile(r'\b\d{2}[\/\-]\d{2}[\/\-]\d{2,4}\b'), "<DATE>"),
+        (re.compile(r'\b[A-Za-z]\s?\d{6}\b'), "<OAB>")
+    ]
+
+    # Itera sobre cada padrão e aplica a substituição
+    for pattern, tag in substitutions:
+        # Usamos uma função lambda para passar a 'tag' para nosso logger
+        text = pattern.sub(lambda m: find_and_log_entity(m, tag), text)
+            
+    return text, regex_entities
+
 if __name__ == "__main__":
-    with open(f"./results/anonymized_{str(model_dir).replace("/","-")}.jsonl", "w", encoding="utf8") as fout:
+    with open(f"./results/anonymized_{str(model_dir).replace('/', '-')}.jsonl", "w", encoding="utf8") as fout:
         for text in read_inputs("./data_seq2seq/to_test/sentences2test.txt"):
-            masked, ents = anonymize_long_text(
-                text.replace("\n"," ").replace("'\'",""),
+            # 1. Anonimização com o modelo de IA
+            masked, ner_entities = anonymize_long_text(
+                text.replace("\n", " ").replace("'\'", ""),
                 tokenizer,
-                max_tokens=256,
-                stride=50
+                max_tokens=500,
+                stride=100
             )
-            # Converte entities para JSON serializable
-            ents_serializable = make_json_serializable(ents)
+            
+            # 2. Anonimização com Regex sobre o texto já mascarado pela IA
+            # A função agora retorna o texto final e as entidades encontradas pelo regex
+            masked, regex_entities = apply_regex_anonymization(text=masked)
+            
+            # 3. Combina as listas de entidades (IA + Regex)
+            all_entities = ner_entities + regex_entities
+            
+            # Converte a lista completa de entidades para ser serializável em JSON
+            ents_serializable = make_json_serializable(all_entities)
 
             fout.write(json.dumps({
                 "original": text,
-                "masked": masked,
+                "masked": masked, # Usa o 'masked' final, após IA e Regex
                 "entities": ents_serializable
             }, ensure_ascii=False) + "\n")
