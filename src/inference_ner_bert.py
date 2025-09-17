@@ -4,7 +4,7 @@ import json
 
 # Caminho do checkpoint treinado
 # model_dir = "./ner-anon-model/checkpoint-800"  # ajuste para o melhor checkpoint
-model_dir = "celiudos/legal-bert-lgpd" # "pierreguillou/ner-bert-large-cased-pt-lenerbr" # "celiudos/legal-bert-lgpd"
+model_dir = "./ner-anon-model/checkpoint-1000" # "celiudos/legal-bert-lgpd"
 # Carregar tokenizer e modelo
 tokenizer = AutoTokenizer.from_pretrained(model_dir)
 model = AutoModelForTokenClassification.from_pretrained(model_dir)
@@ -14,7 +14,7 @@ nlp = pipeline(
     "ner",
     model=model,
     tokenizer=tokenizer,
-    aggregation_strategy="simple"  # junta tokens de uma mesma entidade
+    aggregation_strategy="simple"
 )
 
 # -------------------
@@ -88,6 +88,7 @@ def make_json_serializable(obj):
     """
     Converte tipos não-serializáveis (ex: np.float32) para tipos nativos do Python.
     """
+    
     if isinstance(obj, dict):
         return {k: make_json_serializable(v) for k, v in obj.items()}
     elif isinstance(obj, list):
