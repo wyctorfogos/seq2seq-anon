@@ -1,5 +1,5 @@
 from datasets import load_dataset
-
+import pandas as pd
 from transformers import (
     AutoTokenizer,
     AutoModelForTokenClassification,
@@ -37,6 +37,12 @@ label_list = [
 label2id = {l: i for i, l in enumerate(label_list)}
 id2label = {i: l for l, i in label2id.items()}
 
+
+# Nome do modelo base
+model_name = "pierreguillou/bert-base-cased-pt-lenerbr"
+tokenizer_name = "pierreguillou/bert-base-cased-pt-lenerbr"
+tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
+
 # -----------------------------
 # Dataset
 # -----------------------------
@@ -48,8 +54,29 @@ dataset = load_dataset(
     }
 )
 
-model_name = "pierreguillou/bert-base-cased-pt-lenerbr"
-tokenizer = AutoTokenizer.from_pretrained(model_name)
+tokens_extraidos = pd.read_csv(
+    filepath_or_buffer="./data_seq2seq/to_test/palavras_unicas.csv",
+    sep=",",
+    encoding="utf-8"
+)["tokens"].astype(str).tolist()
+
+
+# Criar versões minúsculas + maiúsculas
+tokens_case_variants = []
+for t in tokens_extraidos:
+    tokens_case_variants.append(t.lower())
+    tokens_case_variants.append(t.upper())
+    if len(t) > 1:
+        tokens_case_variants.append(t.capitalize())
+
+# Remover duplicatas já presentes no vocab
+new_tokens_to_add = list(set(tokens_case_variants) - set(tokenizer.vocab.keys()))
+
+num_added = tokenizer.add_tokens(new_tokens_to_add)
+print(f"{num_added} tokens adicionados (com variantes de maiúscula/minúscula).")
+
+tokenizer.add_tokens(list(new_tokens_to_add))
+
 
 def tokenize_and_align_labels(examples):
     tokenized_inputs = tokenizer(
@@ -86,12 +113,14 @@ tokenized_datasets = dataset.map(tokenize_and_align_labels, batched=True)
 # Modelo
 # -----------------------------
 model = AutoModelForTokenClassification.from_pretrained(
-    model_name,
+    pretrained_model_name_or_path= model_name,
     num_labels=len(label_list),
     id2label=id2label,
     label2id=label2id
 )
 
+# Ajustar embeddings para novos tokens
+model.resize_token_embeddings(len(tokenizer))
 # -----------------------------
 # Métricas
 # -----------------------------
@@ -132,14 +161,15 @@ def compute_metrics(p):
 # Treinamento
 # -----------------------------
 args = TrainingArguments(
-    output_dir="./ner-anon-model",
+    output_dir="./ner-anon-model/added-tokens/",
     eval_strategy="epoch",
     save_strategy="epoch",
     learning_rate=1e-5,
-    per_device_train_batch_size=4,
-    per_device_eval_batch_size=4,
-    gradient_accumulation_steps=1,
-    num_train_epochs=10,
+    per_device_train_batch_size=16,
+    per_device_eval_batch_size=16,
+    per_gpu_eval_batch_size=16,
+    gradient_accumulation_steps=4,
+    num_train_epochs=5,
     weight_decay=1e-2,
     logging_dir="./logs",
     logging_steps=1,
