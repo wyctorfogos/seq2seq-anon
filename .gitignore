@@ -2,3 +2,10 @@ data_seq2seq
 mlruns
 wandb
 t5-anon
+finetuned-anon
+results
+__pycache__
+*.pyc
+*.jsonl
+qwen2-0.5b-anonimizador
+ner-anon-model
