@@ -3,6 +3,7 @@ import os
 import json
 import numpy as np
 import re
+import torch
 from typing import List, Dict, Any, Tuple
 
 # Caminho do checkpoint treinado
@@ -11,13 +12,14 @@ model_dir = "./ner-anon-model/checkpoint-10000" # "celiudos/legal-bert-lgpd"
 # Carregar tokenizer e modelo
 tokenizer = AutoTokenizer.from_pretrained(model_dir)
 model = AutoModelForTokenClassification.from_pretrained(model_dir)
-
+device = "cuda" if torch.cuda.is_available() else "cpu"
 # Criar pipeline de NER
 nlp = pipeline(
     "ner",
     model=model,
     tokenizer=tokenizer,
-    aggregation_strategy="simple"
+    aggregation_strategy="simple",
+    device = device
 )
 
 # -------------------
@@ -134,7 +136,7 @@ def apply_regex_anonymization(text: str):
         (re.compile(r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b'), "<EMAIL>"),
         (re.compile(r'\b(?:\+55\s?)?(?:\(?\d{2}\)?\s?)?(?:9?\d{4}[-\s]?\d{4})\b'), "<PHONE>"),
         (re.compile(r'\b\d{5}-?\d{3}\b'), "<CEP>"),
-        (re.compile(r'\b(?:\d{7}\-\d{2}\.\d{4}.\d{1}\d{2}.\d{4}.\|\d{16})\b'), "<PROCESS_ID>"),
+        (re.compile(r'\b(?:\d{7}-\d{2}\.\d{4}\.\d{1}\.\d{2}\.\d{4}|\d{16})\b'), "<PROCESS_ID>"),
         (re.compile(r'\b\d{2}[\/\-]\d{2}[\/\-]\d{2,4}\b'), "<DATE>"),
         (re.compile(r'\b[A-Za-z]\s?\d{6}\b'), "<OAB>")
     ]
