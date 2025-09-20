@@ -7,7 +7,7 @@ from typing import List, Dict, Any, Tuple
 
 # Caminho do checkpoint treinado
 # model_dir = "./ner-anon-model/checkpoint-800"  # ajuste para o melhor checkpoint
-model_dir = "./ner-anon-model/checkpoint-10000" # "celiudos/legal-bert-lgpd"
+model_dir = "./ner-anon-model/checkpoint-337" # "celiudos/legal-bert-lgpd"
 # Carregar tokenizer e modelo
 tokenizer = AutoTokenizer.from_pretrained(model_dir)
 model = AutoModelForTokenClassification.from_pretrained(model_dir)
@@ -69,14 +69,14 @@ def anonymize_text(text: str, score_threshold: float = 0.75):
 # -------------------
 # Função para textos longos com chunking
 # -------------------
-def anonymize_long_text(text, tokenizer, max_tokens=250, stride=200):
+def anonymize_long_text(text, tokenizer, max_tokens=250, stride=200, score_threshold=0.75):
     chunks = chunk_text(text, tokenizer, max_tokens=max_tokens, stride=stride)
 
     final_text = []
     all_entities = []
 
     for chunk in chunks:
-        anon_chunk, ents = anonymize_text(text=chunk, score_threshold=0.75)
+        anon_chunk, ents = anonymize_text(text=chunk, score_threshold=score_threshold)
         final_text.append(anon_chunk)
         all_entities.extend(ents)
 
@@ -148,13 +148,14 @@ def apply_regex_anonymization(text: str):
 
 if __name__ == "__main__":
     with open(f"./results/anonymized_{str(model_dir).replace('/', '-')}.jsonl", "w", encoding="utf8") as fout:
-        for text in read_inputs("./data_seq2seq/to_test/sentences2test.txt"):
+        for text in read_inputs("./data_ner/to_test/sentences2test.txt"):
             # 1. Anonimização com o modelo de IA
             masked, ner_entities = anonymize_long_text(
                 text.replace("\n", " ").replace("'\'", ""),
                 tokenizer,
                 max_tokens=500,
-                stride=100
+                stride=100,
+                score_threshold=0.5
             )
             
             # 2. Anonimização com Regex sobre o texto já mascarado pela IA
