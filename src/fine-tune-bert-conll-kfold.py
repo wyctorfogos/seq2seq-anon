@@ -1,5 +1,8 @@
 import os
-os.environ["CUDA_LAUNCH_BLOCKING"]="1"
+os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
+
+import numpy as np
+from sklearn.model_selection import KFold
 from datasets import load_dataset
 from transformers import (
     AutoTokenizer,
@@ -9,16 +12,16 @@ from transformers import (
     Trainer,
     EarlyStoppingCallback
 )
-import numpy as np
 import evaluate
+import pandas as pd
 
 # -----------------------------
-# Métrica
+# Carregar dataset JSONL único
 # -----------------------------
-seqeval = evaluate.load("seqeval")
+dataset = load_dataset("json", data_files={"full": "data_ner/train.json"})["full"]
 
 # -----------------------------
-# Labels (CORRIGIDO: Lista completa com todas as entidades)
+# Definição de labels
 # -----------------------------
 label_list = [
     "O",
@@ -39,30 +42,18 @@ label_list = [
     "B-MONEY", "I-MONEY",
     "B-PROCESS_ID", "I-PROCESS_ID",
     "B-CREDIT_CARD", "I-CREDIT_CARD",
-    "B-IP", "I-IP"                   
+    "B-IP", "I-IP"
 ]
 label2id = {l: i for i, l in enumerate(label_list)}
 id2label = {i: l for l, i in label2id.items()}
 
 # -----------------------------
-# Dataset
+# Tokenizer
 # -----------------------------
-dataset = load_dataset(
-    "json",
-    data_files={
-        "train": "data_ner/train.json",
-        "validation": "data_ner/validation.json"
-    }
-)
+model_name = "pierreguillou/bert-base-cased-pt-lenerbr"
+tokenizer = AutoTokenizer.from_pretrained(model_name)
 
-tokenizer_name = "pierreguillou/bert-base-cased-pt-lenerbr"
-tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
-
-# -----------------------------
-# Função de Tokenização (CORRIGIDA e OTIMIZADA)
-# -----------------------------
 def tokenize_and_align_labels(examples):
-    # O tokenizer é aplicado aos tokens pré-divididos
     tokenized_inputs = tokenizer(
         examples["tokens"],
         truncation=True,
@@ -70,50 +61,32 @@ def tokenize_and_align_labels(examples):
         max_length=512,
         padding="max_length"
     )
-
     labels = []
-    # CORRIGIDO: usa "ner_tags_str" que é a chave correta do nosso JSON
     for i, label in enumerate(examples["ner_tags_str"]):
         word_ids = tokenized_inputs.word_ids(batch_index=i)
         previous_word_idx = None
         label_ids = []
         for word_idx in word_ids:
-            # Atribui -100 para tokens especiais como [CLS] e [SEP]
             if word_idx is None:
                 label_ids.append(-100)
-            # Se estamos no primeiro token de uma palavra, usamos seu label
             elif word_idx != previous_word_idx:
                 label_name = label[word_idx]
                 label_ids.append(label2id.get(label_name, label2id["O"]))
-            # OTIMIZADO: Para sub-tokens da mesma palavra, propagamos o label "I-"
             else:
                 label_name = label[word_idx]
-                # Se o label original era B-TAG, o sub-token se torna I-TAG
                 if label_name.startswith("B-"):
                     label_name = "I-" + label_name[2:]
                 label_ids.append(label2id.get(label_name, label2id["O"]))
-            
             previous_word_idx = word_idx
         labels.append(label_ids)
-
     tokenized_inputs["labels"] = labels
     return tokenized_inputs
 
-tokenized_datasets = dataset.map(tokenize_and_align_labels, batched=True)
+# -----------------------------
+# Métricas
+# -----------------------------
+seqeval = evaluate.load("seqeval")
 
-# -----------------------------
-# Modelo
-# -----------------------------
-model = AutoModelForTokenClassification.from_pretrained(
-    tokenizer_name,
-    num_labels=len(label_list),
-    id2label=id2label,
-    label2id=label2id
-)
-
-# -----------------------------
-# Função de Métricas (sem alterações, já estava correta)
-# -----------------------------
 def compute_metrics(p):
     predictions, labels = p
     predictions = np.argmax(predictions, axis=2)
@@ -129,50 +102,84 @@ def compute_metrics(p):
 
     results = seqeval.compute(predictions=true_preds, references=true_labels)
 
+    # mean token accuracy
+    correct, total = 0, 0
+    for pred, lab in zip(predictions, labels):
+        for p_i, l_i in zip(pred, lab):
+            if l_i != -100:
+                total += 1
+                if p_i == l_i:
+                    correct += 1
+    mean_token_accuracy = correct / total if total > 0 else 0.0
+
     return {
+        "accuracy": results["overall_accuracy"],
         "precision": results["overall_precision"],
         "recall": results["overall_recall"],
         "f1": results["overall_f1"],
-        "accuracy": results["overall_accuracy"],
+        "mean_token_accuracy": mean_token_accuracy,
     }
 
 # -----------------------------
-# Treinamento
+# K-FOLD
 # -----------------------------
-args = TrainingArguments(
-    output_dir="./ner-anon-model",
-    evaluation_strategy="epoch",
-    save_strategy="epoch",
-    learning_rate=2e-5,
-    per_device_train_batch_size=4,          # Lote pequeno para caber na memória
-    per_device_eval_batch_size=4,           # Lote de avaliação também pode precisar ser reduzido
-    gradient_accumulation_steps=2,          # Efetivo batch_size = 2 * 4 = 8
-    num_train_epochs=5,
-    weight_decay=0.01,
-    logging_dir="./logs",
-    logging_steps=50,
-    load_best_model_at_end=True,
-    metric_for_best_model="f1",
-    greater_is_better=True,
-    fp16=True
+k = 5
+kf = KFold(n_splits=k, shuffle=True, random_state=42)
+all_metrics = []
+
+for fold, (train_idx, val_idx) in enumerate(kf.split(dataset)):
+    print(f"\n===== Fold {fold+1}/{k} =====")
+
+    train_ds = dataset.select(train_idx).map(tokenize_and_align_labels, batched=True)
+    val_ds = dataset.select(val_idx).map(tokenize_and_align_labels, batched=True)
+
+    model = AutoModelForTokenClassification.from_pretrained(
+        model_name,
+        num_labels=len(label_list),
+        id2label=id2label,
+        label2id=label2id
     )
 
-data_collator = DataCollatorForTokenClassification(tokenizer)
+    args = TrainingArguments(
+        output_dir=f"./ner-anon-model/fold-{fold+1}",
+        evaluation_strategy="epoch",
+        save_strategy="epoch",
+        learning_rate=2e-5,
+        per_device_train_batch_size=4,
+        per_device_eval_batch_size=4,
+        gradient_accumulation_steps=2,
+        num_train_epochs=5,
+        weight_decay=0.01,
+        logging_dir=f"./logs/fold-{fold+1}",
+        logging_steps=50,
+        load_best_model_at_end=True,
+        metric_for_best_model="f1",
+        greater_is_better=True,
+        fp16=True
+    )
 
-trainer = Trainer(
-    model=model,
-    args=args,
-    train_dataset=tokenized_datasets["train"],
-    eval_dataset=tokenized_datasets["validation"],
-    tokenizer=tokenizer,
-    data_collator=data_collator,
-    compute_metrics=compute_metrics,
-    callbacks=[EarlyStoppingCallback(early_stopping_patience=2)]
-)
+    data_collator = DataCollatorForTokenClassification(tokenizer)
 
-print("Iniciando o treinamento do modelo de NER...")
-trainer.train()
-print("Treinamento concluído!")
+    trainer = Trainer(
+        model=model,
+        args=args,
+        train_dataset=train_ds,
+        eval_dataset=val_ds,
+        tokenizer=tokenizer,
+        data_collator=data_collator,
+        compute_metrics=compute_metrics,
+        callbacks=[EarlyStoppingCallback(early_stopping_patience=2)]
+    )
 
-# Salva o melhor modelo no final
-trainer.save_model("./ner-anon-model/best-model")
+    trainer.train()
+    metrics = trainer.evaluate()
+    all_metrics.append(metrics)
+
+# -----------------------------
+# Estatísticas finais
+# -----------------------------
+df = pd.DataFrame(all_metrics)
+print("\n===== Resultados médios =====")
+print(df.mean())
+print("\n===== Desvios padrão =====")
+print(df.std())
