@@ -49,7 +49,7 @@ class SentenceAnonymyzer():
         all_entities = []
 
         for block in blocks:
-            entities = self.nlp(block)
+            entities = self.nlp(str(block).lower()  )
             all_entities.extend(entities)
 
             anon_block = block
@@ -96,18 +96,29 @@ class SentenceAnonymyzer():
             return tag
 
         substitutions = [
-            (re.compile(r'\b(?:\d{3}\.\d{3}\.\d{3}-\d{2}|\d{11})\b'), "<CPF>"),
-            (re.compile(r'\b(?:\d{2}\.\d{3}\.\d{3}\/\d{4}-\d{2}|\d{14})\b'), "<CNPJ>"),
-            (re.compile(r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b'), "<EMAIL>"),
-            (re.compile(r'\b(?:\+55\s?)?(?:\(?\d{2}\)?\s?)?(?:9?\d{4}[-\s]?\d{4})\b'), "<PHONE>"),
-            (re.compile(r'\b\d{5}-?\d{3}\b'), "<CEP>"),
-            (re.compile(r'\b\d{1,2}\.?\d{3}\.?\d{3}-?[\dkK]\b'), "<RG>"),
-            (re.compile(r'\b(?:\d{7}-\d{2}\.\d{4}\.\d{1}\.\d{2}\.\d{4}|\d{16})\b'), "<PROCESS_ID>"),
-            (re.compile(r'\b\d{2}[\/\-]\d{2}[\/\-]\d{2,4}\b'), "<DATE>"),
-            (re.compile(r"\b\d{6,}\b"), "<ID>"),
-            (re.compile(r'\b[A-Za-z]\s?\d{6}\b'), "<OAB>")
-        ]
+            # 1. Padrões com formatos muito distintos e longos
+            (re.compile(r'\b(?:\d{7}-\d{2}\.\d{4}\.\d\.\d{2}\.\d{4}|\d{20})\b'), "<PROCESS_ID>"),
+            (re.compile(r'\b(?:\d{2}\.\d{3}\.\d{3}/\d{4}-\d{2}|\d{14})\b'), "<CNPJ>"),
 
+            # 2. Padrões com palavras-chave específicas + números
+            (re.compile(r'\b(?:cnh|habilitação|carteira)[\s\S]*?(\d{11})\b', re.IGNORECASE), "<CNH>"),
+            (re.compile(r'\bBU\s+\d{8}\b', re.IGNORECASE), "<BU_ID>"),
+
+            # 3. Padrões numéricos comuns (CPF é mais específico que t  elefone de 11 dígitos)
+            (re.compile(r'\b(?:\d{3}\.\d{3}\.\d{3}-\d{2}|\d{11})\b'), "<CPF>"),
+            (re.compile(r'\b(?:\+?55\s*)?(?:(?:\(\d{2}\)|\d{2})\s*)?(?:9\d{4}|\d{4})[-\s]?\d{4}\b'), "<PHONE>"),
+            (re.compile(r'\b\d{1,2}\.?\d{3}\.?\d{3}-?[\dXx]\b', re.IGNORECASE), "<RG>"),
+
+            # 4. Outros formatos específicos
+            (re.compile(r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b'), "<EMAIL>"),
+            (re.compile(r'\b(?:https?://|www\.)[^\s/$.?#].[^\s]*\b', re.IGNORECASE), "<URL>"),
+            (re.compile(r'\b[A-Z]{1,2}\s?\d{2,6}\b', re.IGNORECASE), "<OAB>"),
+            (re.compile(r'\b\d{5}-?\d{3}\b'), "<CEP>"),
+            (re.compile(r'\b\d{2}[/-]\d{2}[/-]\d{2,4}\b'), "<DATE>"),
+
+            # 5. Padrão genérico por último para capturar o que sobrou
+            (re.compile(r"\b\d{6,}\b"), "<ID>")
+        ]
         for pattern, tag in substitutions:
             text = pattern.sub(lambda m: find_and_log_entity(m, tag), text)
 
@@ -130,17 +141,16 @@ class SentenceAnonymyzer():
                 return str(obj)
             
         
-    def pipeline(self, text:str, width:int=100):
+    def pipeline(self, input_text:str, width:int=100):
         try:
+           
             # Anonimização com o modelo de IA
             masked, ner_entities = self.anonymize_text(
-                text=text.replace("\n", " ").replace("'\'", ""),
+                text=input_text.replace("\n", " ").replace("'\'", ""),
                 width=width
             )
-            
             # A função agora retorna o texto final e as entidades encontradas pelo regex
-            masked, regex_entities = self.apply_regex_anonymization(text=masked)
-            
+            masked, regex_entities = self.apply_regex_anonymization(text=masked)            
             # Combina as listas de entidades (IA + Regex)
             all_entities = ner_entities + regex_entities
             
@@ -148,7 +158,7 @@ class SentenceAnonymyzer():
             ents_serializable = self.make_json_serializable(all_entities)
 
             final_response = {
-                "original": text,
+                "original": input_text,
                 "masked": masked, # Usa o 'masked' final, após IA e Regex
                 "entities": ents_serializable
             }

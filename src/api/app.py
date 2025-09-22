@@ -1,10 +1,11 @@
 # -*- coding: utf-8 -*-
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 import uvicorn
 from pydantic import BaseModel
 from typing import Dict, Optional
 import os
+import json
 from models.anonymizer_data import SentenceAnonymyzer
 from dotenv import load_dotenv
 
@@ -55,12 +56,11 @@ def anonymize_text(request: TextRequest) -> Dict:
             status_code=503, # Service Unavailable
             detail="Serviço indisponível: o modelo de IA não foi carregado."
         )
-
+    
+    text = request.text
     try:
         # O Pydantic já garante que `request.text` seja uma string,
-        # então a verificação `isinstance` é desnecessária.
-        text = request.text.strip()
-        
+        # então a verificação `isinstance` é desnecessária.       
         if not text:
              raise HTTPException(status_code=400, detail="O campo 'text' não pode estar vazio.")
         
@@ -68,11 +68,9 @@ def anonymize_text(request: TextRequest) -> Dict:
         cleaned_text = text.replace("\n", " ").replace("\\", "")
         
         pipeline_response = anonymizer_model.pipeline(
-            text=cleaned_text,
-            width=100  # Parâmetro de exemplo
+            input_text=cleaned_text,
+            width=100 
         )
-
-        print(f"Mensagem recebida: {pipeline_response}")
         
         return pipeline_response
     except Exception as e:
