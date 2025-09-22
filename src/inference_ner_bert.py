@@ -1,6 +1,7 @@
 import os
 import json
 import numpy as np
+import pandas as pd
 import models
 from models.anonymizer_class import SentenceAnonymyzer
 from typing import List, Dict, Any, Tuple
@@ -21,18 +22,20 @@ def read_inputs(path):
             yield text
 
 if __name__ == "__main__":
-    model_dir = "./ner-anon-model/added-tokens/checkpoint-355"
-    anonymizer_model = SentenceAnonymyzer(model_dir=model_dir, threshold=0.70)
-    with open(f"./results/anonymized_{str(model_dir).replace('/', '-')}.jsonl", "w", encoding="utf8") as fout:
-        for text in read_inputs("./data_seq2seq/to_test/sentences2test.txt"):
-            # 1. Anonimização com o modelo de IA
-            masked, ner_entities = anonymizer_model.anonymize_long_text(
-                str(text).replace("\n", " ").replace("'\'", ""),
-                anonymizer_model.tokenizer,
-                max_tokens=250,
-                stride=50
+    model_dir = "./ner-anon-model/special-tokens/checkpoint-71" #"./ner-anon-model/checkpoint-10000" # "celiudos/legal-bert-lgpd"
+    anonymizer_model = SentenceAnonymyzer(model_dir=model_dir, threshold=0.75)
+
+    inference_final_results = f"./results/anonymized_{str(model_dir).replace('/', '-')}_added-tokens.jsonl"
+    with open(inference_final_results, "w", encoding="utf8") as fout:
+        for text in read_inputs("./data/to_test/sentences2test.txt"):
+            # Anonimização com Regex sobre o texto
+
+            # Anonimização com o modelo de IA
+            masked, ner_entities = anonymizer_model.anonymize_text(
+                text=text.replace("\n", " ").replace("'\'", ""),
+                width=100
             )
-            # Anonimização com Regex sobre o texto já mascarado pela IA
+            
             # A função agora retorna o texto final e as entidades encontradas pelo regex
             masked, regex_entities = anonymizer_model.apply_regex_anonymization(text=masked)
             
@@ -47,3 +50,5 @@ if __name__ == "__main__":
                 "masked": masked, # Usa o 'masked' final, após IA e Regex
                 "entities": ents_serializable
             }, ensure_ascii=False) + "\n")
+
+    print(f"Dados salvos em:{inference_final_results}\n")
