@@ -1,0 +1,272 @@
+import os
+import json
+import random
+import re
+import pandas
+import string
+from faker import Faker
+from transformers import BertTokenizerFast
+from tqdm import tqdm
+
+# ======================
+# Configuração
+# ======================
+fake = Faker("pt_BR")
+Faker.seed(42)
+random.seed(42)
+
+NUM_EXAMPLES = 10000
+VAL_FRACTION = 0.2
+OUT_DIR = "data_ner"
+os.makedirs(OUT_DIR, exist_ok=True)
+
+tokens_extraidos = pd.read_csv(
+    filepath_or_buffer="./data_seq2seq/to_test/palavras_unicas.csv",
+    sep=",",
+    encoding="utf-8"
+)["tokens"].astype(str).tolist()
+
+
+# Criar versões minúsculas + maiúsculas
+tokens_case_variants = []
+for t in tokens_extraidos:
+    tokens_case_variants.append(t.lower())
+    tokens_case_variants.append(t.upper())
+    if len(t) > 1:
+        tokens_case_variants.append(t.capitalize())
+
+# Nome do modelo base
+model_name = "pierreguillou/bert-base-cased-pt-lenerbr"
+tokenizer_name = "pierreguillou/bert-base-cased-pt-lenerbr"
+tokenizer = BertTokenizerFast.from_pretrained(tokenizer_name)
+
+# Remover duplicatas já presentes no vocab
+new_tokens_to_add = list(set(tokens_case_variants) - set(tokenizer.vocab.keys()))
+
+num_added = tokenizer.add_tokens(new_tokens_to_add)
+print(f"{num_added} tokens adicionados (com variantes de maiúscula/minúscula).")
+
+tokenizer.add_tokens(list(new_tokens_to_add))
+
+# Tipos de entidades para NER
+ENTITY_TYPES = {
+    "name": "PER", "name1": "PER", "name2": "PER", "name3": "PER",
+    "name4": "PER", "name5": "PER", "name6": "PER", "name7": "PER",
+    "name8": "PER",
+    "age": "AGE", "idade": "AGE",
+    "cpf": "CPF", "cnpj": "CNPJ", "rg": "RG",
+    "email": "EMAIL",
+    "phone": "PHONE", "phone1": "PHONE", "phone2": "PHONE", "phone3": "PHONE",
+    "street": "ADDR", "street1": "ADDR", "street2": "ADDR", "street3": "ADDR",
+    "address": "ADDR", "address1": "ADDR", "address2": "ADDR", "address3": "ADDR",
+    "city": "ADDR", "state": "ADDR",
+    "cep": "CEP", "CEP": "CEP",
+    "process_id": "PROCESS_ID", "boletim_id":"PROCESS_ID",
+    "license_plate": "LICENSE_PLATE",
+    "law":"LAW",
+    "oab": "OAB",
+    "company": "ORG", "company2": "ORG",
+    "date": "DATE", "birth": "DATE",
+    "number": "O", "number3": "O", "number2": "O",
+    "money": "MONEY",
+    "credit_card_number": "CREDIT_CARD",
+    "ipaddress": "IP",
+    # Placeholders que não são entidades, como user_id, são mapeados para "O" (ignored)
+    "user_id": "O"
+}
+
+# ======================
+# TEMPLATES
+# ======================
+TEMPLATES = [
+    "O cliente {name} {cpf} mora em {street}, {number}, {city}/{state}, com {age} de idade está em débito com a empresa {company}. Telefone de contato: {phone}.",
+    "{name}, nascido em {birth}, portador do {cpf}, trabalha em {company}.",
+    "Enviar documento para {name2} no endereço {street2}, {cep}.",
+    "Contato: {name} - email: {email} - telefone: {phone}.",
+    "O responsável {name3} (matrícula {user_id}) informou que o endereço {street3}, {number3}, {cep}. é válido.",
+    "Empresa: {company2}, {cnpj}, responsável: {name4}, {phone3}.",
+    "O juiz {name5} deferiu o pedido feito ao requente {name6} após a agressão cometida por parte do agressor (a) {name7} na cidade de {city}/{state} no dia {date}",
+    "{boletim_id} Data de emissão {date} 13:56 Página {number} Histórico do fato A VÍTIMA, RETORNA NESTA DELEGACIA A FIM DE REGISTRAR NOVAMENTE EM DESFAVOR DO AUTOR {name}, NO QUAL HAVIA REGISTRADO PELOS CRIMES DE AGRESSÃO FÍSICA E AMEAÇAS E A VITIMA SOLICITOU MEDIDAS PROTETIVAS;QUE, A VÍTIMA RELATA, NO DIA DOS FATOS ELA SE ENCONTRAVA NA CASA DE SUA MÃE COMO SEMPRE FAZ, POIS ELA CUIDA DOS SEUS PAIS, COMO LEVAR AOS LUGARES QUE SEUS ELES NECESSITAM E OUTROS, PRINCIPALMENTE SUA MÃE.DISSE A VÍTIMA QUE O AUTOR TEM POR HÁBITO FREQUENTAR A CASA DE SUA MÃE QUANDO ELA NÃO SE ENCONTRA, MESMO ELE SABENDO DAS MEDIDAS PROTETIVAS. NO DIA DOS FATOS, A VÍTIMA SE ENCONTRAVA NA CASA DE SEUS PAIS COMO DE COSTUME, QUANDO O AUTOR APARECEU NO PORTÃO GRITANDO PELA MÃE DA VÍTIMA PARA PEDIR COMIDA, DISSE A VÍTIMA O AUTOR TAMBÉM PEDE DINHEIRO, POIS ELE É USUÁRIO DE DROGAS. A VÍTIMA DISSE QUE FOI ATÉ O PORTÃO E PERGUNTOU PARA O AUTOR SE ELE SABE DAS MEDIDAS, E O POR QUE ELE SE ENCONTRAVA NO LOCAL, DISSE A VÍTIMA QUE ELE RESPONDEU XINGANDO A MESMA, MANDANDO ELA , \" TOMAR NO CU\", DEPOIS ELE SAIU. DIANTE DOS FATOS ACIMA, A VITIMA DESEJA REGISTRAR PELO DESCUMPRIMENTO DAS MEDIDAS PROTETIVAS E QUE TEME PELA SUA VIDA, DISSE TAMBÉM QUE SEU PAI NÃO PERMITE A ENTRADA DO AUTOR NA CASA; QUE FOI PERGUNTADO A VÍTIMA SE O AUTOR FAZ USO INDEVIDO DE BEBIDA ALCOOLICA E OU DROGAS, RESPONDEU QUE SIM PARA DROGAS;QUE, FOI PERGUNTADO A VÍTIMA SE O AUTOR POSSUI ARMA DE FOGO E OU PORTE DE ARMA, RESPONDEU QUE ELA SAIBA, NÃO;QUE, FOI PERGUNTADO A VÍTIMA SE DESEJA CASA ABRIGO, RESPONDEU QUE NÃO; QUE A VÍTIMA FOI INFORMADA SOBRE OS SERVIÇOS DA REDE DE PROTEÇÃO A MULHER;QUE,NADA MAIS DISSE, NEM LHE FOI PERGUNTADO, DEU POR ENCERRADO O PRESENTE BOLETIM DE OCORRÊNCIA COM INFORMAÇÕES NARRADAS PELA VÍTIMA. QUE DEPOIS DE LIDO E ACHADO CONFORME, VAI ASSINADO POR TODOS. A VÍTIMA JÁ FAZ ACOMPANHAMENTO NA CASA DO CIDADÃO.A VÍTIMA TAMBÉM DESEJA RESSALTAR QUE O AUTOR ESTA TRABALHANDO, SEM HAVER NECESSIDADE DELE PROCURAR IR ATÉ A CASA DE SUA MÃE. OBS INSERIDA PELO O responsável pelo preenchimento da ocorrência informou que não existem objetos a serem cadastrados nesta ocorrência. DOS ENVOLVIDOS Ordem Nome Completo 1º {name1} POLICIA Versão Tipo de envolvimento POLICIA CIVIL DO {state} / DEAM VITIMA {city} Data/hora {date} DADOS BÁSICOS: BRASIL, CASADO, FILHO DE {name2}, CPF: {cpf}, OUTRO DOCMENTO: {rg} CIVIL, Nº: - , {cnpj} , NASCIDO EM {birth}, {age} ANOS, NATURAL DE {address3}, PROFISSÃO: , TRABALHA: ALTURA APROX .: ENDEREÇO: {address1}// EM FRENTE A {address2} E TENDO COMO TELEFONE(S) PARA CONTATO: TEL. CELULAR: {phone}, TEL. RESIDENCIAL: TEL. COMERCIAL: EMAIL: {email} ENDEREÇO: {address}, PRÓXIMO DELEGACIA PATRIMONIAL E TENDO COMO TELEFONE(S) PARA CONTATO: TEL. CELULAR: {phone}, TEL. RESIDENCIAL: {phone1}- TEL. COMERCIAL: {phone2} - EMAIL: {email} DADOS COMPLEMENTARES: PROFISSÃO: - , EMPRESA: {company} , RENDA: - SALÁRIOS MÍNIMOS, SEXO: FEMININO, ORIENTAÇÃO SEXUAL: HETEROSSEXUAL, CUTIS: BRANCA, ESCOLARIDADE: SUPERIOR COMPLETO, RELACIONA-SE COM: - APELIDO: RELIGIÃO: POSSUI LESÃO: NÃO - , FOI 1 AGREDIDO/TORTURADO: SIM - IP da estação {ipaddress} Verificador {number} Responsável por gerar {name8}",
+    "· {boletim_id} Data de emissão {date} 13:56 Página 1/4 SECRETARIA DE SEGURANÇA PÚBLICA E DEFESA SOCIAL DO ESPÍRITO SANTO BOLETIM UNIFICADO (BU) {process_id} Registrado em {date} às 13:13 DO REGISTRO Unidade Registro DEAM VITÓRIA Método da lavratura REGISTRO PRESENCIAL Endereço da unidade de registro {street}, {cep} Telefone(s) para contato da unidade Nº Ciodes NÃO INFORMADO Observação DESCUMPRIMENTO DE MEDIDAS PROTETIVAS DOS FATOS Data/hora do fato Tipo de local {date} às 13:30 RESIDÊNCIA Evento SEM EVENTO Endereço do fato {street1}, {city}/{state}, POLICIA Versão POLICIA CIVIL DO ES Unidade Policial CIVI DEAM VITÓRIA Incidente/Nature A17 CRIMES CONTRA A PESSOA: DESCUMPRIMENTO DA MEDIDA PROTETIVA IP da estação {ipaddress} Verificador {number} Responsável por gerar {name}.",
+    "No dia {date}, {street}, {number}, {cep}, {city}/{state}, ocorreu um incidente de natureza criminosa em que o indivíduo {name} agrediu o cidadão {name1}, portador do {cpf}, provocando-lhe lesões corporais que exigiram imediato atendimento médico, conforme boletim de ocorrência lavrado junto à autoridade competente; o ocorrido gerou ampla repercussão na comunidade local, culminando na instauração de ação penal por parte do Ministério Público, e a vítima, {name}, já havia prestado depoimento e disponibilizado seus dados de contato, telefone {phone2} e e‑mail {email}, para fins de elucidação dos fatos, enquanto o agressor, {name1}, permanece à vista das autoridades. A juíza responsável por julgar o processo, {name2}, em sua decisão preliminar, ressaltou a gravidade do ato, destacando a necessidade de aplicação de medidas cautelares em favor da vítima e a obrigação do acusado de reparar os danos causados, em conformidade com os dispositivos penais vigentes e as diretrizes de proteção às vítimas de violência.",
+    "No dia {date}, por volta das 14h15, no endereço {street}, {number}, {city}/{state}, foi registrado o presente boletim de ocorrência, narrando um episódio de agressão física contra a vítima {name2}, portador do {cpf}, que alegou ter sido alvo de agressões verbais e físicas por parte do acusado {name2}, cuja identidade permanece a ser corroborada por diligências posteriores, estando disponível o contato telefônico {phone2} e e‑mail {email} para eventual complementação de informações. O fato, considerado de natureza criminosa, foi devidamente registrado pelo servidor policial responsável, sob a apreciação e responsabilidade do juízo competente, representado pelo {name2}, que deverá conduzir a devida tramitação processual em consonância com a legislação vigente, assegurando ao denunciado o pleno exercício do contraditório e da ampla defesa.",
+    "No dia {date}, às 14h30, no {street}, {number}, {city}/{state}, foi registrado o boletim de ocorrência referente a assalto agravado cometido pelo indivíduo {name}, {age} ANOS, contra o cidadão {name1}, portador do {cpf}, que, ao entrar na residência do local, foi surpreendido pelo agressor que, sob ameaça de violência física, requisitou a posse de um celular de marca e modelo desconhecido, culminando em ato de violência física leve que deixou o acusado com contusões leves e o vitimado com ferimento superficial na região do ombro. A ocorrência foi narrada pelo próprio {name}, que, com total convicção, descreveu a agressividade do acusado, bem como os detalhes do local e da situação. A delegacia competente, sob a responsabilidade do juiz a cargo do processo, a Sra. {name2}, prontamente registrou a denúncia, fixou os dados pessoais do agressor e da vítima, anotou o número de telefone de contato {phone2} para eventuais diligências e registrou o e‑mail {email} como meio de comunicação adicional, assegurando, assim, a continuidade das investigações e o adequado encaminhamento do caso aos órgãos competentes, em conformidade com o Código de Processo Penal e demais normas vigentes.",
+    "Em {date}, no Tribunal de Justiça do Estado de Goiás, o juízo de primeira instância, presidido pela desembargadora {name2}, recebeu a denúncia de agressão de natureza física praticada pelo acusado {name2} contra a vítima {name2}, portadora do {cpf}, que relatou ter sido agredida no endereço {street}, {number}, {city}/{state}, durante a qual sofreu lesões corporais confirmadas por laudos médicos anexados aos autos; a própria vítima, em contato com o juízo por meio do telefone {phone2} e do e‑mail {email}, entregou sua versão dos fatos e solicitou providências, o que motivou a abertura do inquérito policial para apurar as circunstâncias do fato e determinar a aplicação das sanções legais cabíveis.",
+    "Ao Senhor Doutor Juiz {name1}, respeitosamente, cumpre a presente petição inicial à vista do ilícito ocorrido em {date}, na {street}, {number}, {cep}, {city}/{state}, onde a vítima {name2}, portadora do {cpf}, foi alvo de agressão física e verbal por parte da agressora {name2}, resultando em lesões corporais e psicológicas de natureza grave, conforme laudo médico anexo. Tal fato, testemunhado por vários moradores da rua, gerou o direito de se pleitear reparação pelos danos morais e materiais suportados, bem como a adoção de medidas de segurança, de modo a preservar a integridade física e psicológica da vítima. Para fins de contato, a assistente jurídica da autora pode ser localizada pelo telefone {phone2} e pelo e‑mail {email}, onde estão à disposição todos os documentos que corroboram o relato apresentado, aguardando deferimento das providências cabíveis e a condenação da ré, {name2}, nos termos da legislação aplicável.",
+    "Na data de {date}, às 14h32, no {street1}, {name}, {street}, {number}, {cep}, {city}/{state}, registrou-se o fato de agressão física e verbal contra o Sr. {name}, {age} de idade, portador do {cpf}, pelos atos de violência praticados por {name2}, a fim de que sejam adotadas as providências cabíveis; a ocorrência foi recebida pela autoridade policial competente e protocolada sob o número 2025-ABR-0034, sendo que a Dra. {name3}, Juíza de Direito competente, deverá avaliar a denúncia, com contato a ser efetuado através do telefone {phone2} ou pelo e‑mail {email}, para regularização do processo e definição das medidas de segurança e reparação a serem aplicadas a este caso.",
+    "Na data de {date}, {street}, {number}, {cep}, {city}/{state}, foi registrado o incidente descrito nos autos, no qual o Sr. {name}, {age} de idade, portador do {cpf}, foi agraviado pelo Sr. {name}; o fato culminou em lesões corporais e danos materiais, os quais foram devidamente avaliados pela equipe de perícia e documentados no boletim de ocorrência. O Ministério Público, representado pelo {name2}, recebeu a denúncia por meio dos contatos telefônico {phone2} e eletrônico {email}, os quais foram utilizados para a comunicação e coordenação das providências legais subsequentes, assegurando o atendimento dos princípios do contraditório, ampla defesa e observância da legalidade estrita nas ações judiciais pertinentes.",
+    "No dia {date}, às 15h30, na {street}, {number}, {cep}, {city}/{state}, registrou‑se o incidente de agressão física, pelo qual a vítima {name}, portador do {cpf}, {age} de idade, sofreu violência doméstica de parte da agressora {name2}; o fato culminou em lesões que requerem atendimento médico e consequente registro policial, conforme determina o art. 138 do Código Penal, com respaldo à Lei Maria da Penha; o Ministério Público notificou o Ministério Público Federal de que o crime foi denunciado ao delegado de polícia e que o juiz responsável pelo caso é a ilustre Juíza {name3}, que já emitiu despacho preliminar para a instauração do inquérito policial; em nota de apoio ao esclarecimento, foi disponibilizado o telefone de contato {phone2} e o e‑mail {email} para que as partes interessadas possam se comunicar com a autoridade competente e apresentar elementos probatórios que corroborem o teor dos autos, de forma a garantir o devido processo legal e a proteção dos direitos da vítima.",
+    "NOTIFICAÇÃO DE AUTUAÇÃO DE TRÂNSITO\nDestinatário:\nNome:{name2}\nEndereço: {street2}, {number}, {cep}, {city}/{state}\n\nDados da Infração:\nVeículo: Chevrolet \n\nPlaca: {license_plate}\nData: {date}\nLocal: {street}, {cep}, {city}/{state}\nDescrição da Infração: Excesso de Velocidade. Seu veículo foi registrado a 120 km/h em uma via onde o limite de velocidade é de 80 km/h.\nPenalidades:\nMulta: {money}\n\nPontos na CNH: 10 \nArtigo do CTB: 218\nInstruções:\nVocê tem o prazo de 10 dias, a partir da data desta notificação, para apresentar uma Defesa Prévia ou indicar o real condutor do veículo. O boleto para pagamento da multa está anexo e pode ser pago com desconto até a data de vencimento.\nPara mais informações, consulte o site ou ligue para {phone2}.\nAtenciosamente,\nDETRAN-{state}{date}",
+    "NOTIFICAÇÃO EXTRAJUDICIAL\n\nNotificado(a):\n{name}\n {street2}, {number}, {cep}, {city}/{state}\n\nAssunto: Uso indevido de propriedade\n\nPrezado(a) Senhor(a),\n\nA presente notificação\n\nEste ato se baseia no Art. 2 da {law}, que trata.\n\nPedimos a regularização de [Ação a ser tomada, ex: o pagamento, a desocupação do imóvel] no prazo de [Número de dias] dias.\n\nA ausência de resposta ou ação no prazo resultará nas medidas judiciais cabíveis, com a cobrança de custas e honorários.\n\nPara contato: {email}.\n\nAtenciosamente,\n\n{name2}\n{date}",
+    "NOTIFICAÇÃO EXTRAJUDICIAL\nNº do processo {process_id}\nPara:\n{name}\n{street}, {cep}, {city}/{state}\n\nAssunto: Uso indevido de cartão de crédito.\n\nPrezado(a) Senhor(a),\n\nIdentificamos transações não autorizadas em seu nome, usando meu cartão de crédito final {credit_card_number}. As compras totalizam {money}.\n\nO uso de cartão de terceiros é crime, conforme Art. 171 do Código Penal.\n\nExigimos a devolução do cartão e o ressarcimento total de {money} em 2 dias.\n\nCaso contrário, tomaremos medidas judiciais.\n\nAtenciosamente,\n\n{name2}\n{date}",
+    "Prezado(a) {name}, sou {name2}, advogado(a) inscrito(a) na {oab}. Nº do processo {process_id}. Escrevo sobre o débito pendente referente ao contrato nº {number} . Por favor, peço que entre em contato o mais breve possível para regularizarmos a situação. Caso contrário, tomaremos as medidas judiciais cabíveis. Agradeço a atenção.",
+    "\nQUARTA CÂMARA CÍVEL\n\n\n \n\n\nAGRAVO DE INSTRUMENTO N.º {process_id}\n\n\nAGRAVANTE: MINISTÉRIO PÚBLICO DO ESTADO DO ESPÍRITO SANTO\n\n\nAGRAVADOS: MUNICÍPIO DE {city} E {name}\n\n\nRELATOR: DESEMBARGADOR {name2}\n\n\n \n\n\n \n\n\nDECISÃO MONOCRÁTICA\n\n\n \n\n\nNos termos do art. 932, III, do Código de Processo Civil1 e, também, do art. 160 do Regimento Interno deste egrégio Tribunal de Justiça2, não conheço do recurso de agravo de instrumento, eis que prejudicado em razão da perda do objeto – sentença proferida – (id {number}).\n\n\n \n\n\nPublique-se na íntegra, intimando-se as partes.\n\n\n \n\n\nApós o decurso do prazo recursal, remetam-se os autos à Comarca de origem, com as cautelas de estilo. \n\n\n \n\n\n{city} ({state}), em {date}.\n\n\n\n\n\n\nDESEMBARGADOR {name2}\n\n\nRELATOR\n\n\n1 Art.  932. Incumbe ao relator: (…) III – não conhecer de recurso  inadmissível, prejudicado ou que não tenha impugnado  especificamente os fundamentos da decisão recorrida.\n\n\n2 Art.  160 – Nos feitos cíveis, poderá o recorrente, a qualquer tempo,  sem anuência do recorrido, ou do litisconsorte, desistir do recurso  interposto, sendo este ato unilateral não receptício e  irretratável, que independe de homologação.\n",
+    r"\n \nESTADO DO ESPÍRITO SANTO\nPODER JUDICIÁRIO\n1ª Câmara Cível\nEndereço: {street}, {city} - {state} - {cep}\nNúmero       telefone:(  )     \n\n\n\n\n\n\n\n\nPROCESSO Nº {process_id} \nAPELAÇÃO CÍVEL ({number}) \nAPELANTE: MUNICIPIO DE {city}\n REPRESENTANTE: PROCURADORIA MUNICIPAL DE {city}\n  \nAPELADO: {name2}\n\n\n\n\n\n\n\nDECISÃO MONOCRÁTICA\n\n\n\n\n\n\nTrata-se de APELAÇÃO CÍVEL interposta contra a r. sentença de Id. {number}, proferida pelo juízo da Vara Cível, Comercial, Fazenda Pública Municipal e Estadual, Registro Público e Meio Ambiente de {city}/{state}, que extinguiu o feito executivo fiscal, com fulcro no art. 924, inciso IV, do CPC/15, por se tratar de débito inferior ao parâmetro legal, estabelecido pela {law}, que dispensa a cobrança judicial e autoriza a desistência da execução fiscal.\n\n\n \n\n\nO Município exequente interpôs o presente recurso de apelação aduzindo, em síntese, a nulidade da sentença proferida por tratar-se de débito que atualizado supera o valor mínimo previsto na Lei Municipal.\n\n\n \n\n\nSem contrarrazões.\n\n\n \n\n\nÉ o relatório.\n\n\n \n\n\nDecido Monocraticamente, com fulcro no artigo 932 do Código de Processo Civil.\n\n\n \n\n\nPois bem.\n\n\n \n\n\nA {law}, com redação alterada pela {law}, citada pelo magistrado na sentença, passou a exigir um valor de crédito tributário mínimo de {money} para propositura de execução fiscal, bem como autorizou a Procuradoria Municipal requerer a desistência das ações que não atendessem o referido valor mínimo.\n\n\n \n\n\nSenão vejamos o texto legal:\n\n\n \n\n\nArt. 1º Fica dispensado o ajuizamento de execuções fiscais cujo valor relativo a um mesmo devedor seja igual ou inferior a {money}. (Redação dada pela {law})\n\n\n[…]\n\n\nArt. 2º Fica autorizada a desistência das ações de execução fiscal e seu respectivo recurso, cujo valor seja inferior ao estabelecido no art. 1º desta lei.\n\n\n \n\n\nNão obstante a conclusão do magistrado sentenciante, não logrei localizar nos autos qualquer indício de que o valor dos débitos em nome do executado, após a pertinente atualização, seriam inferiores ao valor constante da lei local.\n\n\n \n\n\nPor não ter sido oportunizada nos autos a manifestação do Município antes de proferida a sentença, o Recorrente acostou, em apelação, certidão de débitos com os valores corrigidos (Id. {number2}), que totalizam montante superior ao valor constante na Lei Municipal.\n\n\n \n\n\nAdemais, oportuno mencionar que ao tempo do ajuizamento da ação, em 2015, se encontrava em plena vigência o Decreto Municipal nº 255/2014 com previsão semelhante de dispensa de cobrança de débitos inferiores a {money}.\n\n\n \n\n\nDesta feita, revela-se inequívoco o “error in procedendo” do juízo originário ao proferir sentença extintiva sem prévia intimação da parte autora, bem como inobservando o valor atualizado da dívida face à previsão da legislação local.\n\n\n \n\n\nDo exposto, CONHEÇO e DOU PROVIMENTO ao recurso para ANULAR a sentença recorrida, determinando o prosseguimento do feito executivo fiscal.\n\n\n \n\n\nIntime-se o apelante do teor da presente.\n\n\n \n\n\nCertificado o trânsito em julgado, remetam-se os autos à vara de origem.\n\n\n \n\n\nDiligencie-se.\n\n\n \n\n\n{city}, {state}.\n\n\n \n\n\{name3}\n\n\nDesembargador Relator\n",
+    "\n \nESTADO DO ESPÍRITO SANTO\nPODER JUDICIÁRIO\n3ª Câmara Cível\nEndereço: {street2} {city} - {state} - {cep}\nNúmero       telefone:(  )     \n\n\n\n\n\n\n\n\nAGRAVO DE INSTRUMENTO Nº {process_id}\n\n\n \n\n\nRELATOR              : DES. {name2}.\n\n\nRECORRENTE       : {name3}\n\n\nADVOGADO          : {name4}- {oab}\n\n\nRECORRIDO          : MINISTERIO PUBLICO DO ESTADO DO ESPIRITO SANTO\n\n\nMAGISTRADO      :{name}\n\n\n \n\n\n \n\n\nDECISÃO MONOCRÁTICA\n\n\n \n\n\nEMENTA. PROCESSUAL CIVIL. AGRAVO DE INSTRUMENTO. AÇÃO DE IMPROBIDADE ADMINISTRATIVA. CUMPRIMENTO DE SENTENÇA. DESCUMPRIMENTO DO ART. {number}, DO CPC. AUSÊNCIA DE PROVA. PROCEDIMENTO CORRETO. REMESSA À CONTADORIA DO JUÍZO. POSSIBILIDADE. RECURSO DESPROVIDO.\n\n\n1. Não deve ser acolhido o alegado descumprimento do art. 524, do CPC quando o Agravante não demonstra a afirmada inconsistência e, além disso, os documentos que instruem o recurso indicam a correção do iter procedimental seguido pelo juízo condutor da via satisfativa.\n\n\n2. É admissível a remessa dos autos à Contadoria do juízo para a identificação do quantum debeatur objeto do cumprimento de sentença, sobretudo quando impugnados os valores apurados, conforme disposto no art. 524, §2º, do CPC. Precedentes do STJ.\n\n\n \n\n\n1. RELATÓRIO.\n\n\n \n\n\n            Trata-se de Agravo de Instrumento interposto por ALDO SOARES DE OLIVEIRA em face da r. decisão interlocutória de 1º grau que rejeitou os pedidos formulados no bojo da Ação de Improbidade Administrativa proposta pelo Ministério Público, que tramita em fase de cumprimento de sentença condenatória.\n\n\n            Alega, em síntese, que não foi apreciada a questão afeta ao suposto descumprimento do art. 524, do CPC. Requereu, liminarmente, a suspensão da r. decisão que impulsionou o feito satisfativo e, ao final, pugnou pelo provimento do recurso com a reforma do julgado.\n\n\n            Decisão ID 2668109 recebendo o recurso somente no efeito devolutivo.\n\n\n            Contrarrazões pelo desprovimento.\n\n\n            Parecer da Procuradoria de Justiça Cível pelo desprovimento da irresignação.\n\n\n            É o relatório. Decido, monocraticamente.\n\n\n \n\n\n \n\n\n2. FUNDAMENTAÇÃO.\n\n\n \n\n\n             O Agravante alega que a existência de irregularidade na fase satisfativa da Ação de Improbidade Administrativa inaugurada pelo Ministério Público, pelo descumprimento do disposto no art. 524, do CPC.\n\n\n            Entretanto, as assertivas não merecem prosperar.\n\n\n            Em primeiro lugar, compulsando detidamente o andamento processual da demanda, que tramita em meio físico até então, constatei que o ora Recorrente já apresentou diversos questionamentos ao juízo condutor do feito originário, que foram oportunamente apreciados.\n\n\n            Especificamente quanto ao valor do débito objeto do cumprimento de sentença, é possível aferir que o juízo a quo, ainda em março de 2020, proferiu decisão em que determinou o retorno  dos autos à Contadoria para a respectiva apuração do quantum, após insurgência do ora Agravante quanto ao montante devido.\n\n\n            Vejam a conclusão da referida decisão: “No mais, considerando que em petição de fls. 1958/1962 o demandado Aldo Soares se insurgiu quanto ao valor apurado pela Contadoria deste Juízo às fls. 1928, valor este que o autor da ação requer que seja considerado para o cumprimento de sentença, determino o retorno do feito à Contadoria para apurar o montante, considerando o despacho de fls. 1926. Realizado o cálculo/atualização, vista às partes.”\n\n\n             Os valores indicados pela Contadoria do Juízo foram anexados devidamente aos autos, conforme documentos ID 1815489 e seguintes.\n\n\n            Portanto, a questão afeta ao quantum debeatur fora efetivamente objeto de pronunciamentos anteriores, o que desnatura a alegação de que não teria sido apreciada pelo juízo de origem.\n\n\n            De todo modo, especificamente quanto ao alegado descumprimento do art. 524, do CPC, não existe inconsistência procedimental que justifique a alegada irregularidade.\n\n\n            Na verdade, o Agravante sequer acostou aos autos a cópia integral da fase satisfativa em apreço, sobretudo eventuais documentos, cálculos ou valores indicados pelo Exequente no curso do cumprimento judicial, sendo inviável a aferição da matéria suscitada. Além disso, nem mesmo indicou a quantia que entende devida ou possível prejuízo advindo da alegada irregularidade, limitando-se a apresentar questão procedimental que não deve ser acolhida.\n\n\n            Nessa linha, o STJ.\n\n\n \n\n\nAGRAVO INTERNO NO AGRAVO EM RECURSO ESPECIAL. PROCESSUAL CIVIL. CUMPRIMENTO DE SENTENÇA. IMPUGNAÇÃO. EXCESSO DE EXECUÇÃO. ÚNICO FUNDAMENTO. ART. 525, § 4º, DO CPC DE 2015 (NORMA CORRESPONDENTE AO ARTIGO 475-L, § 2º, DO CPC/73). ENTENDIMENTO DO TRIBUNAL DE ORIGEM EM CONSONÂNCIA COM O ENTENDIMENTO DESTA CORTE. APLICAÇÃO DA SÚMULA N. 83/STJ. AUSÊNCIA DE PREENCHIMENTO DE REQUISITO LEGAL. SÚMULA N. 7/STJ. AGRAVO INTERNO NÃO PROVIDO.\n\n\n1. \"Na hipótese do art. 475-L, § 2º, do CPC, é indispensável apontar, na petição de impugnação ao cumprimento de sentença, a parcela incontroversa do débito, bem como as incorreções encontradas nos cálculos do credor, sob pena de rejeição liminar da petição, não se admitindo emenda à inicial\" (REsp 1387248/{state}, Rel. Ministro {name2}, CORTE ESPECIAL, julgado em {date}, DJe {date}).\n\n\n2. A modificação da conclusão a que chegou o Tribunal de origem, que concluiu que a ora agravante não teria cumprido o requisito exigido por lei, de apresentação de memória discriminada e atualizada de seu débito, no momento da juntada da defesa aos autos, demandaria o revolvimento do suporte fático-probatório dos autos, providência inviável no recurso especial, nos termos da Súmula n. 7/STJ.\n\n\n3. Agravo interno não provido.\n\n\n(AgInt no AREsp n. 1.789.278/MS, relator Ministro {name4}, Quarta Turma, julgado em {date}, DJe de {date}.)\n\n\n \n\n\n            Como se não bastasse, de acordo com o disposto no art. 524, §2º, do CPC, verbis: “Para a verificação dos cálculos, o juiz poderá valer-se de contabilista do juízo, que terá o prazo máximo de 30 (trinta) dias para efetuá-la, exceto se outro lhe for determinado.”\n\n\n            Sobre o tema, o C. STJ:\n\n\n \n\n\nPROCESSUAL CIVIL E ADMINISTRATIVO. AGRAVO INTERNO NO RECURSO ESPECIAL. EXECUÇÃO. CÁLCULOS DA CONTADORIA JUDICIAL ELABORADOS EM VALOR SUPERIOR AO APRESENTADO PELO EXEQUENTE. ADEQUAÇÃO AO TÍTULO JUDICIAL. NÃO OCORRÊNCIA DE JULGAMENTO EXTRA OU ULTRA PETITA. INCIDÊNCIA DA SÚMULA 83/STJ. AGRAVO INTERNO DA UNIVERSIDADE FEDERAL DE {state} A QUE SE NEGA PROVIMENTO.\n\n\n1. As instâncias de origem deixaram de adotar a conta elaborada pela Contadoria do Juízo, por entenderem que o juiz não poderá incluir na pretensão executiva, por intermédio de decisão proferida em embargos do devedor, valor superior à pretensão executiva deduzida pelo credor, ainda que o próprio devedor não controverta a propósito do chamado excesso de execução ou que a Contadoria, órgão meramente auxiliar que não influencia na conformação do objeto do processo, venha a sugerir valor diverso (fls. 179).\n\n\n2. O entendimento adotado pelo Tribunal de origem não se alinha à diretriz desta corte Superior de que os valores indicados pelas partes não vinculam o Magistrado, que, com base no livre convencimento motivado, poderá definir qual valor melhor reflete o título. Com efeito, o acolhimento de cálculos elaborados pela contadoria oficial, embora superiores àqueles apresentados pela parte exequente, não configura hipótese de julgamento ultra petita, à vista da necessidade de ajustar os cálculos aos parâmetros da sentença exequenda, garantindo a perfeita execução do julgado (AgInt no REsp. 1.650.796/{state}, Rel. Min. {name}, DJe {date}).\n\n\n3. Ademais, importante salientar que no momento em que um Juiz envia um título executivo para a Contadoria para fins de conferência dos cálculos ele apenas está exercendo mais um dos seus deveres: o controle jurisdicional. Cumpre-se, assim, a regra de que a jurisdição atue, e isso jamais poderia ser equiparado a um julgamento ultra petita.\n\n\n4. A Contadoria não atua para prestar serviço exclusivamente ao Juiz, mas precipuamente aos jurisdicionados, pois um erro de cálculo pode causar prejuízo a qualquer uma das partes em um litígio. Daí porque a lei, § 2o. do art. 524 do Código Fux confere ao Magistrado a prerrogativa de utilizar o serviço judicial da Contadoria quando entender necessário. Trata-se de uma prerrogativa, que não importa em julgamento extra ou ultra petita, ainda que a Contadoria Judicial apure valores diversos daqueles apontados pelas partes. Precedentes:\n\n\nAgInt no REsp. 1.672.844/{state}, Rel. Min. {name3}, DJe {date}; AgInt nos EDcl no AREsp. 1.306.961/PA, Rel. Min. LUIS FELIPE SALOMÃO, DJe 26.2.2019; REsp. 1.753.655/{state}, Rel. Min. {name3}, DJe {date}.\n\n\n5. Agravo Interno da UNIVERSIDADE FEDERAL DE {state} que se nega provimento.\n\n\n(AgInt no REsp n. 1.586.666/{state}, relator Ministro {name}, Primeira Turma, julgado em {date}, DJe de {date}.)\n\n\n \n\n\n            E, ainda:\n\n\n \n\n\nAGRAVO INTERNO NO RECURSO ESPECIAL. PROCESSUAL CIVIL. CUMPRIMENTO DE SENTENÇA. IMPUGNAÇÃO. PRINCÍPIO DA FIDELIDADE AO TÍTULO. MEMÓRIA DE CÁLCULO. ADEQUAÇÃO. POSSIBILIDADE. PRECLUSÃO. NÃO OCORRÊNCIA.\n\n\n1. Recurso especial interposto contra acórdão publicado na vigência do Código de Processo Civil de 2015 (Enunciados Administrativos nºs 2 e 3/STJ).\n\n\n2. A simples interpretação do título judicial exequendo com o objetivo de extrair a verdadeira extensão do seu comando não configura rediscussão da lide, tampouco implica ofensa à coisa julgada.\n\n\n3. Não ofende a coisa julgada a decisão que, ainda na fase de cumprimento de sentença, mesmo sem a manifestação da parte executada, promove a adequação dos cálculos apresentados pelo exequente aos limites do título judicial exequendo.\n\n\n4. Hipótese em que não houve a prolação de sentença homologatória dos cálculos apresentados pela parte exequente.\n\n\n5. Agravo interno não provido.\n\n\n(AgInt no REsp n. 1.834.109/{state}, relator Ministro {name4}, Terceira Turma, julgado em {date}, DJe de {date}.)\n\n\n \n\n\n \n\n\n            De fato, a apresentação da memória discriminada do crédito é necessária para permitir que o devedor impugne a quantia cobrada na fase satisfativa, inclusive apresentando especificamente o valor que entende devido, se diverso daquele indicado pelo credor, a teor do art. 525, §4º, o CPC o que não foi feito pelo Agravante.\n\n\n            Assim, não estando sequer o juízo condutor do cumprimento vinculado ao valor indicado pelo Exequente e, ainda, tendo sido determinada a remessa dos autos à Contadoria Judicial por mais de uma vez, não há qualquer irregularidade que justifique o acolhimento da pretensão recursal.\n\n\n \n\n\n3. DISPOSITIVO.\n\n\n \n\n\n            Em face do exposto, NEGO PROVIMENTO ao recurso.\n\n\n            Intimem-se. Publique-se na íntegra.\n\n\n            {city} ({state}), data registrada no sistema.\n\n\n \n\n\n \n\n\n \n\n\nDesembargador {name}.\n\n\nRelator\n\n\n \n\n\n \n\n\n \n\n\n\nDesembargador(a)\n"
+]
+
+FAKER_GENERATORS = {
+    "name": fake.name, "name1": fake.name, "name2": fake.name, "name3": fake.name,
+    "name4": fake.name, "name5": fake.name, "name6": fake.name, "name7": fake.name,
+    "name8": fake.name,
+    "age": lambda: str(random.randint(18, 90)),
+    "idade": lambda: str(random.randint(18, 90)),
+    "cpf": fake.cpf, "cnpj": fake.cnpj, "rg": lambda: f"{random.randint(10, 59)}.{random.randint(100, 999)}.{random.randint(100, 999)}-{random.randint(0, 9)}",
+    "email": fake.email,
+    "phone": fake.phone_number, "phone1": fake.phone_number, "phone2": fake.phone_number, "phone3": fake.phone_number,
+    "street": fake.street_name, "street1": fake.street_name, "street2": fake.street_name, "street3": fake.street_name,
+    "address": fake.address, "address1": fake.address, "address2": fake.address, "address3": fake.city,
+    "city": fake.city, "state": fake.state_abbr,
+    "cep": fake.postcode, "CEP": fake.postcode,
+    "process_id": lambda: f"{random.randint(1000, 9999999)}-{random.randint(10, 99)}.{random.randint(2010, 2025)}.{random.randint(1, 9)}.{random.randint(10, 99)}.{random.randint(1000, 9999)}",
+    "boletim_id": lambda: f"BU-{random.randint(2023, 2025)}-{random.randint(10000000, 99999999)}",
+    "license_plate": lambda: f"{''.join(random.choices(string.ascii_uppercase, k=3))}-{random.randint(1000, 9999)}",
+    "law": lambda: f"Lei Municipal nº {random.randint(100, 5000)}/{random.randint(1990, 2023)}",
+    "oab": lambda: f"{fake.state_abbr()}{random.randint(1000, 999999)}",
+    "company": fake.company, "company2": fake.company,
+    "date": lambda: fake.date_of_birth(minimum_age=1, maximum_age=5).strftime('%d/%m/%Y'),
+    "birth": lambda: fake.date_of_birth(minimum_age=18, maximum_age=90).strftime('%d/%m/%Y'),
+    "number": lambda: str(random.randint(1, 100)),
+    "number2": lambda: str(random.randint(1000000, 9999999)),
+    "number3": lambda: str(random.randint(1, 1000)),
+    "money": lambda: f"R$ {random.uniform(50, 5000):.2f}".replace('.',','),
+    "credit_card_number": fake.credit_card_number,
+    "ipaddress": fake.ipv4,
+    "user_id": lambda: str(random.randint(10000, 99999))
+}
+
+# ======================
+# Função utilitária: aplica ruído leve (opcional)
+# ======================
+def aplicar_ruido(valor: str) -> str:
+    # Aqui você pode customizar ruídos; por enquanto mantém valor original
+    if valor is None:
+        return valor
+    if random.random() < 0.08:
+        # remover último caractere (simula erro/parcial)
+        return valor[:-1]
+    if random.random() < 0.02:
+        return valor + random.choice(["x", "!", "#"])
+    return valor
+
+# ======================
+# Geração e rotulagem com alinhamento robusto aos offsets
+# ======================
+def generate_data():
+    dataset = []
+    label_set = set()
+    for i in tqdm(range(NUM_EXAMPLES), desc="Gerando exemplos"):
+        template = random.choice(TEMPLATES)
+
+        # extrai placeholders no template
+        placeholders = sorted(list(set(re.findall(r'\{([^}]+)\}', template))), key=len, reverse=True)
+
+        generated_values = {}
+        for placeholder in placeholders:
+            if placeholder in FAKER_GENERATORS:
+                generated_values[placeholder] = aplicar_ruido(str(FAKER_GENERATORS[placeholder]()))
+        # preenche texto
+        try:
+            text = template.format(**generated_values)
+        except KeyError as e:
+            # Se faltar algum placeholder no generated_values, substituir por string vazia
+            missing = e.args[0]
+            generated_values[missing] = ""
+            text = template.format(**generated_values)
+
+        # tokeniza com offsets
+        tokenized_output = tokenizer(
+            text,
+            return_offsets_mapping=True,
+            truncation=True,
+            max_length=512
+        )
+
+        tokens = tokenizer.convert_ids_to_tokens(tokenized_output['input_ids'])
+        offsets = tokenized_output['offset_mapping']  # lista de (start, end) por token
+        input_ids = tokenized_output['input_ids']
+
+        # inicializa com "O"
+        labels = ['O'] * len(tokens)
+
+        # Para cada placeholder gerado, encontra ocorrência(s) no texto e marca tokens
+        for placeholder, value in generated_values.items():
+            if value is None or value == "":
+                continue
+            entity_type = ENTITY_TYPES.get(placeholder)
+            if not entity_type or entity_type == 'O':
+                continue
+
+            # escape e busca no texto (pode ocorrer múltiplas ocorrências)
+            for match in re.finditer(re.escape(str(value)), text):
+                start_char, end_char = match.span()
+                first_token_idx = None
+                # percorre tokens e marca aqueles com overlap > 0
+                for idx, (offset_start, offset_end) in enumerate(offsets):
+                    # offsets (0,0) geralmente são special tokens -> ignorar
+                    if offset_start == offset_end == 0:
+                        continue
+                    # condição de overlap: token e entidade se interceptam
+                    if (offset_start < end_char) and (offset_end > start_char):
+                        if first_token_idx is None:
+                            labels[idx] = f"B-{entity_type}"
+                            first_token_idx = idx
+                            label_set.add(f"B-{entity_type}")
+                        else:
+                            labels[idx] = f"I-{entity_type}"
+                            label_set.add(f"I-{entity_type}")
+
+        # garantir que labels e tokens tenham mesmo tamanho
+        assert len(labels) == len(tokens) == len(offsets) == len(input_ids)
+
+        dataset.append({
+            "id": i,
+            "tokens": tokens,
+            "input_ids": input_ids,
+            "ner_tags_str": labels,
+            "full_text": text
+        })
+
+    # sempre inclua 'O' no vocabulário de labels
+    label_set.add('O')
+    return dataset, sorted(label_set)
+
+# ======================
+# Execução principal e salvamento
+# ======================
+if __name__ == "__main__":
+    print("Iniciando a geração de dados sintéticos...")
+    full_dataset, label_list = generate_data()
+    print(f"Geração concluída. Total de {len(full_dataset)} exemplos.")
+    print(f"Labels encontradas ({len(label_list)}): {label_list}")
+
+    # embaralha e divide
+    random.shuffle(full_dataset)
+    val_size = int(len(full_dataset) * VAL_FRACTION)
+    val_set = full_dataset[:val_size]
+    train_set = full_dataset[val_size:]
+
+    # caminhos
+    train_path = os.path.join(OUT_DIR, "train.json")
+    val_path = os.path.join(OUT_DIR, "validation.json")
+    labels_path = os.path.join(OUT_DIR, "labels.json")
+
+    # salvar datasets (JSON arrays)
+    with open(train_path, 'w', encoding='utf-8') as f:
+        json.dump(train_set, f, ensure_ascii=False, indent=2)
+
+    with open(val_path, 'w', encoding='utf-8') as f:
+        json.dump(val_set, f, ensure_ascii=False, indent=2)
+
+    # salvar lista de labels (útil para configurar id2label/label2id)
+    with open(labels_path, 'w', encoding='utf-8') as f:
+        json.dump(label_list, f, ensure_ascii=False, indent=2)
+
+    print(f"\nDados salvos com sucesso!")
+    print(f"Treino: {train_path} ({len(train_set)} exemplos)")
+    print(f"Validação: {val_path} ({len(val_set)} exemplos)")
+    print(f"Labels: {labels_path}")
+
+    # mostrar um exemplo para debug
+    print("\n--- Exemplo de Saída (treino[0]) ---")
+    print(json.dumps(train_set[0], indent=2, ensure_ascii=False))

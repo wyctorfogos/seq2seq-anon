@@ -49,8 +49,7 @@ class SentenceAnonymyzer():
         all_entities = []
 
         for block in blocks:
-            block_lower = block.lower()  # versão para o modelo
-            entities = self.nlp(block_lower)
+            entities = self.nlp(block)
             all_entities.extend(entities)
 
             anon_block = block

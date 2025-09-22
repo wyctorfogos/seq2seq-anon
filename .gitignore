@@ -10,3 +10,6 @@ __pycache__
 qwen2-0.5b-anonimizador
 ner-anon-model
 data
+bert-ner-model
+data_ner
+config/.env
