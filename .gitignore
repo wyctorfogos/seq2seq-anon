@@ -13,3 +13,5 @@ data
 bert-ner-model
 data_ner
 config/.env
+docker/config/.env
+docker/.env

@@ -4,3 +4,5 @@ faker==35.2.1
 datasets==3.1.0
 seqeval==1.2.2
 torch==2.4.1
+transformers==4.54.1
+python-dotenv==1.0.1

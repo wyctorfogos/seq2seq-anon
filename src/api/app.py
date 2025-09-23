@@ -65,7 +65,7 @@ def anonymize_text(request: TextRequest) -> Dict:
              raise HTTPException(status_code=400, detail="O campo 'text' não pode estar vazio.")
         
         # Limpeza do texto e chamada do pipeline de anonimização
-        cleaned_text = text.replace("\n", " ").replace("\\", "")
+        cleaned_text = text.replace(" ","\n").replace("\\", "").strip()
         
         pipeline_response = anonymizer_model.pipeline(
             input_text=cleaned_text,

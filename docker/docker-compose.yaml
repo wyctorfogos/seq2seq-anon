@@ -1,0 +1,30 @@
+services:
+  sentence-anonymizer-api-service:
+    container_name: sentence-anonymizer-api-service
+    build:
+      context: .
+      dockerfile: dockerfile
+      args:
+        - HTTP_PROXY=${HTTP_PROXY}
+        - CERT_URL=${CERT_URL}
+    env_file:
+      - ./.env
+    volumes:
+      - ../src:/app/src/
+      - ../results:/app/results/
+    environment:
+      - PORT_API_ANONYMIZER_SERVICES=${PORT_API_ANONYMIZER_SERVICES}
+      - NER_MODEL_FOLDER_PATH=${NER_MODEL_FOLDER_PATH}
+      - THRESHOLD_FOR_RECOGNITION=${THRESHOLD_FOR_RECOGNITION}
+    ports:
+      - "${PORT_API_ANONYMIZER_SERVICES}:${PORT_API_ANONYMIZER_SERVICES}"
+    command: python3 /app/src/api/app.py
+    restart: always
+    stdin_open: true
+    tty: true
+    networks:
+      - network-ia
+
+networks:
+  network-ia:
+    driver: bridge

@@ -1,0 +1,20 @@
+FROM python:3.12-slim
+
+WORKDIR /app
+
+ARG HTTP_PROXY
+ARG CERT_URL
+# RUN if [ -n "$HTTP_PROXY" ] && [ -n "$CERT_URL" ]; then \
+#         apt-get update && apt-get install -y --no-install-recommends curl && \
+#         curl -sSL "$CERT_URL" -o /usr/local/share/ca-certificates/proxy-cert.crt && \
+#         update-ca-certificates && \
+#         echo "[global]" > /etc/pip.conf && \
+#         echo "proxy = $HTTP_PROXY" >> /etc/pip.conf && \
+#         echo "cert = /usr/local/share/ca-certificates/proxy-cert.crt" >> /etc/pip.conf && \
+#         echo "trusted-host = pypi.python.org pypi.org files.pythonhosted.org" >> /etc/pip.conf && \
+#         apt-get remove -y curl && apt-get autoremove -y && rm -rf /var/lib/apt/lists/*; \
+#     fi
+
+COPY ../ .
+
+RUN pip3 install -r requirements.txt
