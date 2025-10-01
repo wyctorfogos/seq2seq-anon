@@ -13,13 +13,13 @@
 
 # Para gerar os pares de sentenças:
 ```bash
-    python3 src/generate_dataset.py
+    python3 src/scripts/generate_data2ner.py
 ```
 
 
 # Para treinar  modelo:
 ```bash
-    python3 src/train_nlp_model.py
+    python3 src/scripts/fine-tune-bert.py
 ```
 
 
